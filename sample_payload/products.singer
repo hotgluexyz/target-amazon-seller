@@ -1,0 +1,3 @@
+{"type": "SCHEMA", "stream": "Products", "schema": {"type": ["object", "null"], "properties": {"variants": {"type": ["array", "null"], "items": {"type": "object", "properties": {"sku": {"type": ["string", "null"]}, "price": {"type": ["string", "null"]}}}}}, "key_properties": []}
+{"type": "RECORD", "stream": "Products", "record": {"variants": [{"sku": "TEST-SKU-001", "price": "29.99"}]}}
+{"type": "STATE", "value": {}}

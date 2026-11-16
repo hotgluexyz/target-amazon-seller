@@ -1,0 +1,30 @@
+[tool.poetry]
+name = "target-amazon-seller"
+version = "0.0.1"
+description = "`target-amazon-seller` is a Singer target for Amazon Seller, built with the Hotglue Singer SDK for Singer Targets."
+readme = "README.md"
+authors = ["hotglue"]
+keywords = ["ELT", "Amazon Seller"]
+license = "Apache-2.0"
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.15"
+hotglue-singer-sdk = "^1.0.1"
+hotglue-etl-exceptions = "0.1.0"
+python-amazon-sp-api = ">=2.1.8,<2.2.0"
+
+[tool.poetry.dev-dependencies]
+pytest = "^7.0"
+tox = "^3.24.4"
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+src_paths = "target_amazon_seller"
+
+[build-system]
+requires = ["poetry-core>=1.0.8"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+target-amazon-seller = "target_amazon_seller.target:TargetAmazonSeller.cli"
