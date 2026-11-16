@@ -1,5 +1,7 @@
 """Tests standard target features using the built-in SDK tests library."""
 
+import pytest
+from hotglue_singer_sdk.exceptions import ConfigValidationError
 from hotglue_singer_sdk.testing import get_standard_target_tests
 
 from target_amazon_seller.target import TargetAmazonSeller
@@ -13,7 +15,6 @@ SAMPLE_CONFIG = {
     "aws_secret_key": "fake-secret-key",
     "role_arn": "arn:aws:iam::123456789012:role/fake-sp-api-role",
     "marketplace": "US",
-    "sandbox": True,
 }
 
 
@@ -33,3 +34,8 @@ def test_config_requires_selling_partner_id():
     schema = TargetAmazonSeller.config_jsonschema
     required = set(schema.get("required") or [])
     assert "selling_partner_id" in required
+
+
+def test_sandbox_config_fails_when_sp_api_loaded_production_endpoints():
+    with pytest.raises(ConfigValidationError, match="sandbox=true"):
+        TargetAmazonSeller(config={**SAMPLE_CONFIG, "sandbox": True})

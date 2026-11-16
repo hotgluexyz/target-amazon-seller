@@ -3,11 +3,12 @@
 import logging
 
 import pytest
-from hotglue_etl_exceptions import InvalidPayloadError
+from hotglue_etl_exceptions import InvalidCredentialsError, InvalidPayloadError
+from sp_api.auth.exceptions import AuthorizationError
 from sp_api.base import ApiResponse
 from sp_api.base.exceptions import SellingApiBadRequestException, SellingApiRequestThrottledException
 
-from target_amazon_seller.client import AmazonSellerSink, listing_context_from_payload
+from target_amazon_seller.client import AmazonSellerSink, listing_context_from_payload, to_number
 
 
 class _FakeListingsClient:
@@ -45,6 +46,22 @@ def test_bad_request_is_not_retried(monkeypatch):
     with pytest.raises(InvalidPayloadError, match="patchListingsItem sku='SKU-1'"):
         _sink_with_client(monkeypatch, client).patch_listings("SKU-1", {})
     assert client.calls == 1
+
+
+def test_lwa_authorization_error_is_invalid_credentials(monkeypatch):
+    client = _FakeListingsClient([AuthorizationError("invalid_grant", "bad refresh token", 400)])
+    with pytest.raises(InvalidCredentialsError, match="patchListingsItem sku='SKU-1'"):
+        _sink_with_client(monkeypatch, client).patch_listings("SKU-1", {})
+
+
+@pytest.mark.parametrize("value", [2.9, "2.5", "two"])
+def test_to_number_rejects_non_whole_int(value):
+    with pytest.raises(InvalidPayloadError, match="quantity"):
+        to_number(value, int, "quantity")
+
+
+def test_to_number_accepts_whole_float_as_int():
+    assert to_number("5.0", int, "quantity") == 5
 
 
 def test_invalid_patch_submission_fails_with_issues(monkeypatch):

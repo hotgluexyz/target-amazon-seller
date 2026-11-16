@@ -6,12 +6,11 @@ from typing import Any
 
 from hotglue_etl_exceptions import InvalidPayloadError
 from sp_api.api import OrdersV0, OrdersV20260101
-from sp_api.base.exceptions import SellingApiException
 
 from target_amazon_seller.client import (
     MFN_CHANNEL_CODE,
+    SP_API_ERRORS,
     AmazonSellerSink,
-    ListingContext,
     sp_throttle_retry,
     to_number,
 )
@@ -92,19 +91,23 @@ class UpdateInventorySink(AmazonSellerSink):
 
     OPERATIONS = ("set", "add", "subtract")
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._mfn_quantity_written: dict[str, int] = {}
+
     @staticmethod
-    def resolve_quantity(listing: ListingContext, operation: str, quantity: int) -> int:
+    def resolve_quantity(current: int | None, operation: str, quantity: int) -> int:
         """Compute the absolute MFN quantity for ``set``, ``add``, or ``subtract``."""
         if operation == "set":
             return quantity
-        if listing.mfn_quantity is None:
+        if current is None:
             raise InvalidPayloadError(
                 f"Cannot apply inventory operation {operation!r}: "
                 "getListingsItem did not return an MFN quantity"
             )
         if operation == "add":
-            return listing.mfn_quantity + quantity
-        return listing.mfn_quantity - quantity
+            return current + quantity
+        return current - quantity
 
     @staticmethod
     def inventory_patch_body(
@@ -141,6 +144,10 @@ class UpdateInventorySink(AmazonSellerSink):
         time missing from the patch, so the listing's current lead time is kept when the
         record has none. ``variant_id`` is used as the SKU when ``sku`` is missing, because
         the unified read sets variant ids to the seller SKU.
+
+        Amazon applies accepted patches with a delay, so ``add`` and ``subtract`` start from
+        the quantity this run last wrote for the SKU. Stock changed by another process during
+        the run is not seen for those SKUs.
         """
         sku = record.get("sku") or record.get("variant_id")
         if not sku:
@@ -157,11 +164,12 @@ class UpdateInventorySink(AmazonSellerSink):
                     f"SKU {sku!r} is fulfilled by Amazon; set switch_to_mfn to convert it to seller-fulfilled"
                 )
             self.logger.info("Switching sku=%s from Amazon-fulfilled to seller-fulfilled (MFN)", sku)
-        new_quantity = self.resolve_quantity(listing, operation, quantity)
+        current = self._mfn_quantity_written.get(sku, listing.mfn_quantity)
+        new_quantity = self.resolve_quantity(current, operation, quantity)
         if new_quantity < 0:
             raise InvalidPayloadError(
                 f"Inventory {operation!r} of {quantity} on sku={sku!r} would reduce MFN quantity "
-                f"{listing.mfn_quantity} below zero"
+                f"{current} below zero"
             )
 
         lead_time = record.get("lead_time_to_ship_max_days")
@@ -177,6 +185,7 @@ class UpdateInventorySink(AmazonSellerSink):
             lead_time_to_ship_max_days=lead_time,
         )
         payload = self.patch_listings(sku, body)
+        self._mfn_quantity_written[sku] = new_quantity
         return payload.get("submissionId") or sku, True, {}
 
 
@@ -206,7 +215,7 @@ class FulfillmentsSink(AmazonSellerSink):
                 order_id,
                 includedData=["FULFILLMENT", "PACKAGES"],
             )
-        except SellingApiException as exc:
+        except SP_API_ERRORS as exc:
             self.handle_sp_api_error(exc, f"getOrder order_id={order_id!r}")
         return response.payload["order"]
 
@@ -264,7 +273,7 @@ class FulfillmentsSink(AmazonSellerSink):
                 marketplaceId=self.marketplace_id,
                 packageDetail=package_detail,
             )
-        except SellingApiException as exc:
+        except SP_API_ERRORS as exc:
             self.handle_sp_api_error(exc, f"confirmShipment order_id={order_id!r}")
         return order_id
 

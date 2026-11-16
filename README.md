@@ -156,4 +156,4 @@ python -m venv .venv
 tox
 ```
 
-Set `"sandbox": true` in the config to run against the SP-API sandbox. Sandbox responses are static, so only requests that match Amazon's sandbox examples succeed.
+Set `"sandbox": true` in the config to run against the SP-API sandbox. Pass the config as `--config <path>` (or export `AWS_ENV=SANDBOX`), otherwise the target stops instead of calling production. Sandbox responses are static, so only requests that match Amazon's sandbox examples succeed.

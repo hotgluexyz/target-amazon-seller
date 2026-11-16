@@ -7,6 +7,7 @@ from typing import Any, NoReturn
 from hotglue_etl_exceptions import InvalidCredentialsError, InvalidPayloadError
 from hotglue_singer_sdk.target_sdk.client import HotglueSink
 from sp_api.api import ListingsItems
+from sp_api.auth.exceptions import AuthorizationError
 from sp_api.base import Marketplaces
 from sp_api.base.exceptions import (
     SellingApiBadRequestException,
@@ -17,6 +18,7 @@ from sp_api.base.exceptions import (
 from sp_api.util import throttle_retry
 
 MFN_CHANNEL_CODE = "DEFAULT"
+SP_API_ERRORS = (SellingApiException, AuthorizationError)
 
 
 def sp_throttle_retry():
@@ -78,11 +80,20 @@ def listing_context_from_payload(sku: str, payload: dict[str, Any]) -> ListingCo
 
 
 def to_number(value: Any, cast: type, field: str) -> Any:
-    """Cast a record value with ``cast``, raising ``InvalidPayloadError`` when it is not numeric."""
+    """Cast a record value to ``float`` or ``int``, raising ``InvalidPayloadError`` when it does not fit.
+
+    ``int`` accepts whole floats such as ``5.0`` or ``"5.0"`` and rejects ``2.9`` instead of
+    truncating it.
+    """
     try:
-        return cast(value)
+        number = float(value)
     except (TypeError, ValueError) as exc:
         raise InvalidPayloadError(f"{field} must be a number, got {value!r}") from exc
+    if cast is int:
+        if not number.is_integer():
+            raise InvalidPayloadError(f"{field} must be a whole number, got {value!r}")
+        return int(number)
+    return number
 
 
 class AmazonSellerSink(HotglueSink):
@@ -128,13 +139,14 @@ class AmazonSellerSink(HotglueSink):
             marketplace=self.marketplace,
         )
 
-    def handle_sp_api_error(self, exc: SellingApiException, label: str) -> NoReturn:
+    def handle_sp_api_error(self, exc: Exception, label: str) -> NoReturn:
         """Map ``python-amazon-sp-api`` errors to hotglue error classes; re-raise anything else.
 
         ``label`` names the call and record key (e.g. ``getListingsItem sku='ABC'``) because
-        Amazon error bodies do not say which SKU or order they refer to.
+        Amazon error bodies do not say which SKU or order they refer to. ``AuthorizationError``
+        is a failed LWA token exchange (bad client id, secret, or refresh token).
         """
-        if isinstance(exc, SellingApiForbiddenException):
+        if isinstance(exc, (SellingApiForbiddenException, AuthorizationError)):
             raise InvalidCredentialsError(f"{label}: {exc}") from exc
         if isinstance(exc, (SellingApiBadRequestException, SellingApiNotFoundException)):
             raise InvalidPayloadError(f"{label}: {exc}") from exc
@@ -156,7 +168,7 @@ class AmazonSellerSink(HotglueSink):
                 marketplaceIds=[self.marketplace_id],
                 includedData=self.LISTING_INCLUDED_DATA,
             )
-        except SellingApiException as exc:
+        except SP_API_ERRORS as exc:
             self.handle_sp_api_error(exc, f"getListingsItem sku={sku!r}")
 
         context = listing_context_from_payload(sku, response.payload or {})
@@ -187,7 +199,7 @@ class AmazonSellerSink(HotglueSink):
                 marketplaceIds=[self.marketplace_id],
                 body=body,
             )
-        except SellingApiException as exc:
+        except SP_API_ERRORS as exc:
             self.handle_sp_api_error(exc, f"patchListingsItem sku={sku!r}")
 
         payload = response.payload or {}

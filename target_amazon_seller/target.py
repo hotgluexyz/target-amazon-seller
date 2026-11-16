@@ -5,6 +5,7 @@ import os
 import sys
 
 from hotglue_singer_sdk import typing as th
+from hotglue_singer_sdk.exceptions import ConfigValidationError
 from hotglue_singer_sdk.helpers.capabilities import AlertingLevel
 from hotglue_singer_sdk.target_sdk.target import TargetHotglue
 
@@ -32,6 +33,8 @@ def _apply_sandbox_env_from_argv() -> None:
 
 
 _apply_sandbox_env_from_argv()
+
+from sp_api.base import marketplaces  # noqa: E402
 
 from target_amazon_seller.sinks import FulfillmentsSink, ProductsSink, UpdateInventorySink  # noqa: E402
 
@@ -74,14 +77,13 @@ class TargetAmazonSeller(TargetHotglue):
             state=state,
         )
         if self.config.get("sandbox"):
-            if os.environ.get("AWS_ENV") == "SANDBOX":
-                self.logger.info("SP-API sandbox mode enabled (AWS_ENV=SANDBOX)")
-            else:
-                self.logger.warning(
-                    "Config has sandbox=true but AWS_ENV is not SANDBOX. "
-                    "Run with --config so sandbox is applied before sp_api loads, "
+            if marketplaces.AWS_ENVIRONMENT != marketplaces.AwsEnv.SANDBOX.value:
+                raise ConfigValidationError(
+                    "Config has sandbox=true but sp_api loaded production endpoints. "
+                    "Run with --config <path> so sandbox is applied before sp_api loads, "
                     "or export AWS_ENV=SANDBOX before starting the process."
                 )
+            self.logger.info("SP-API sandbox mode enabled (AWS_ENV=SANDBOX)")
 
 
 if __name__ == "__main__":

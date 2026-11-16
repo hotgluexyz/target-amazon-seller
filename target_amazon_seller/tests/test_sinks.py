@@ -22,6 +22,7 @@ def _listing(
 def _inventory_sink(monkeypatch, listing: ListingContext) -> tuple[UpdateInventorySink, list[dict]]:
     sink = UpdateInventorySink.__new__(UpdateInventorySink)
     sink.logger = logging.getLogger("test")
+    sink._mfn_quantity_written = {}
     patched: list[dict] = []
     monkeypatch.setattr(UpdateInventorySink, "marketplace_id", "ATVPDKIKX0DER")
     monkeypatch.setattr(sink, "get_listing_context", lambda sku: listing)
@@ -39,6 +40,18 @@ def _fulfillments_sink() -> FulfillmentsSink:
     sink = FulfillmentsSink.__new__(FulfillmentsSink)
     sink._last_package_reference_id = {}
     return sink
+
+
+def _shipping_sink(monkeypatch, order: dict) -> tuple[FulfillmentsSink, list[tuple[str, dict]]]:
+    sink = _fulfillments_sink()
+    confirmed: list[tuple[str, dict]] = []
+    monkeypatch.setattr(sink, "get_order", lambda order_id: order)
+    monkeypatch.setattr(
+        sink,
+        "confirm_shipment",
+        lambda order_id, package: confirmed.append((order_id, package)) or order_id,
+    )
+    return sink, confirmed
 
 
 def test_price_patch_shape():
@@ -84,16 +97,23 @@ def test_inventory_uses_variant_id_as_sku(monkeypatch):
 
 
 def test_set_uses_record_quantity_directly():
-    assert UpdateInventorySink.resolve_quantity(_listing(4), "set", 10) == 10
+    assert UpdateInventorySink.resolve_quantity(4, "set", 10) == 10
 
 
 def test_subtract_computes_from_live_quantity():
-    assert UpdateInventorySink.resolve_quantity(_listing(10), "subtract", 3) == 7
+    assert UpdateInventorySink.resolve_quantity(10, "subtract", 3) == 7
 
 
 def test_add_requires_existing_mfn_quantity():
     with pytest.raises(InvalidPayloadError):
-        UpdateInventorySink.resolve_quantity(_listing(None), "add", 1)
+        UpdateInventorySink.resolve_quantity(None, "add", 1)
+
+
+def test_repeated_subtract_starts_from_quantity_written_in_this_run(monkeypatch):
+    sink, patched = _inventory_sink(monkeypatch, _listing(10))
+    sink.upsert_record({"sku": "SKU-1", "operation": "subtract", "quantity": 3}, {})
+    sink.upsert_record({"sku": "SKU-1", "operation": "subtract", "quantity": 2}, {})
+    assert [_availability(body)["quantity"] for body in patched] == [7, 5]
 
 
 def test_amazon_fulfilled_listing_requires_switch_to_mfn(monkeypatch):
@@ -166,3 +186,41 @@ def test_package_reference_id_counts_packages_confirmed_in_this_run():
     sink = _fulfillments_sink()
     assert sink.next_package_reference_id(ORDER_ID, {"packages": []}) == "1"
     assert sink.next_package_reference_id(ORDER_ID, {"packages": []}) == "2"
+
+
+def test_fulfillment_confirms_record_line_items(monkeypatch):
+    order = {"orderId": ORDER_ID, "orderItems": [], "packages": [{"packageReferenceId": "1"}]}
+    sink, confirmed = _shipping_sink(monkeypatch, order)
+    record = {
+        "order_id": ORDER_ID,
+        "carrier": "USPS",
+        "tracking_number": "9400100000000000000000",
+        "ship_date": "2026-11-16T12:00:00Z",
+        "line_items": [{"id": "166417490198481", "quantity": 1}],
+    }
+    sink.upsert_record(record, {})
+    assert confirmed == [
+        (
+            ORDER_ID,
+            {
+                "packageReferenceId": "2",
+                "carrierCode": "USPS",
+                "shippingMethod": "Standard",
+                "trackingNumber": "9400100000000000000000",
+                "shipDate": "2026-11-16T12:00:00Z",
+                "orderItems": [{"orderItemId": "166417490198481", "quantity": 1}],
+            },
+        )
+    ]
+
+
+def test_fulfillment_without_line_items_ships_unfulfilled_units(monkeypatch):
+    order = {
+        "orderId": ORDER_ID,
+        "orderItems": [{"orderItemId": "05015851154158", "fulfillment": {"quantityUnfulfilled": 2}}],
+    }
+    sink, confirmed = _shipping_sink(monkeypatch, order)
+    sink.upsert_record({"order_id": ORDER_ID, "carrier": "UPS", "tracking_number": "1Z999"}, {})
+    package = confirmed[0][1]
+    assert package["packageReferenceId"] == "1"
+    assert package["orderItems"] == [{"orderItemId": "05015851154158", "quantity": 2}]
