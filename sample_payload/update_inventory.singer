@@ -1,0 +1,3 @@
+{"type": "SCHEMA", "stream": "UpdateInventory", "schema": {"type": ["object", "null"], "properties": {"sku": {"type": ["string", "null"]}, "operation": {"type": ["string", "null"]}, "quantity": {"type": ["integer", "null"]}, "lead_time_to_ship_max_days": {"type": ["integer", "null"]}}}, "key_properties": []}
+{"type": "RECORD", "stream": "UpdateInventory", "record": {"sku": "TEST-SKU-001", "operation": "set", "quantity": 25, "lead_time_to_ship_max_days": 2}}
+{"type": "STATE", "value": {}}
